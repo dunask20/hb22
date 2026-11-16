@@ -1,0 +1,334 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Подарок из букв</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  /* Layout: один вертикальный кадр 9:16 по центру, под ним строка управления.
+     Тема одна, ночная: сцена с снегом читается только на тёмном фоне. */
+  :root {
+    --bg: #0a0c16;
+    --panel: #10132200;
+    --fg: #cfd5ee;
+    --muted: #7b84a8;
+    --line: #272c4a;
+    --accent: #ffbc38;
+    --accent-ink: #1a1405;
+    --mono: "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  html, body { background: var(--bg); }
+  body {
+    color: var(--fg);
+    font: 13px/1.5 var(--mono);
+    padding-block: 14px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  header { width: min(100%, 560px); display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .02em; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); font-size: 12px; }
+  canvas {
+    display: block;
+    width: min(100%, calc((100dvh - 190px) * 0.5625));
+    min-width: 0;
+    aspect-ratio: 9 / 16;
+    background: var(--bg);
+    border: 1px solid var(--line);
+  }
+  .controls { width: min(100%, 560px); display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: center; }
+  .group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+  button {
+    font: inherit; font-size: 12px; color: var(--fg); background: transparent;
+    border: 1px solid var(--line); border-radius: 2px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  input[type=range] { accent-color: var(--accent); width: 110px; }
+  .swatch { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 1px solid #ffffff55; vertical-align: -1px; }
+</style>
+
+<main>
+  <header>
+    <h1>Подарок из букв</h1>
+    <p>Облако 3D-точек, нарисованное символами</p>
+  </header>
+  <canvas id="cv" width="720" height="1280" aria-label="Вращающийся подарок с бантом, нарисованный буквами"></canvas>
+  <div class="controls">
+    <div class="group" id="pals" role="group" aria-label="Цвета"></div>
+    <div class="group">
+      <label for="spd">Скорость <input id="spd" type="range" min="0" max="2" step="0.05" value="1"></label>
+      <button id="replay" type="button">Заново</button>
+    </div>
+  </div>
+</main>
+
+<script>
+(() => {
+  const W = 720, H = 1280, CW = 8, CH = 13, COLS = W / CW, ROWS = Math.floor(H / CH);
+  const RHO = 2000, PITCH = 22 * Math.PI / 180, SCALE = 195, CAM_D = 9, SPIN = 0.55;
+  const RAMP = " .,:;-=+*xX#%@", NR = RAMP.length;
+  const STAR = RAMP.indexOf("*"), PLUS = RAMP.indexOf("+"), DOT = RAMP.indexOf(".");
+  const SNOW = [0.62, 0.70, 0.90];
+  const REVEAL = [[0, 1.0], [0.5, 1.8], [2.0, 1.2], [3.0, 1.2], [4.0, 1.8], [5.0, 1.2]];
+  const PALETTES = [
+    { name: "Красный и золото", sw: "#c9121f", paper: [.80, .07, .13], dot: [1, .93, .85], rib: [1, .74, .22], champ: [1, .88, .58] },
+    { name: "Синий и серебро", sw: "#1a40b3", paper: [.10, .25, .70], dot: [.92, .95, 1], rib: [.85, .88, .95], champ: [.96, .97, 1] },
+    { name: "Зелёный и красный", sw: "#0d6b38", paper: [.05, .42, .22], dot: [1, .90, .70], rib: [.95, .25, .25], champ: [1, .55, .50] },
+    { name: "Розовый и бордо", sw: "#f5cbdb", paper: [.96, .80, .86], dot: [1, 1, 1], rib: [.65, .15, .35], champ: [.85, .35, .55] },
+  ];
+
+  // ---------- генератор случайных чисел, чтобы подарок выглядел одинаково
+  function mk(seed) { let a = seed; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  let rnd = mk(7);
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(6.283185307 * rnd());
+
+  // ---------- геометрия: облако точек (положение, нормаль, цвет, блеск)
+  function build(pal) {
+    rnd = mk(7);
+    const P = [], N = [], C = [], S = [], G = [], T = [];
+    const add = (x, y, z, nx, ny, nz, r, g, b, sh, gr, tw) => {
+      const l = Math.hypot(nx, ny, nz) || 1;
+      P.push(x, y, z); N.push(nx / l, ny / l, nz / l); C.push(r, g, b); S.push(sh); G.push(gr); T.push(tw ? 1 : 0);
+    };
+    const paper = (s, t) => {
+      const fx = s * 2.4, fy = t * 2.4 + 0.5 * (((Math.floor(fx) % 2) + 2) % 2);
+      const dx = (fx - Math.floor(fx)) - .5, dy = (fy - Math.floor(fy)) - .5;
+      if (dx * dx + dy * dy < 0.028) return pal.dot;
+      const k = (0.92 + 0.16 * rnd()) * (1 + 0.04 * Math.sin(s * 9 + t * 5));
+      return [pal.paper[0] * k, pal.paper[1] * k, pal.paper[2] * k];
+    };
+    const occl = y => (1 - 0.55 * Math.min(1, Math.max(0, (y - 1.22) / 0.18))) * (1 - 0.25 * Math.min(1, Math.max(0, (0.25 - y) / 0.25)));
+    const ribbon = (x, y) => { const k = 0.93 + 0.07 * Math.sin(y * 80 + x * 40); return [pal.rib[0] * k, pal.rib[1] * k, pal.rib[2] * k]; };
+
+    // земля (снег)
+    for (let i = 0; i < 30000; i++) {
+      const rad = 3.6 * Math.sqrt(rnd()), ang = rnd() * 6.2832;
+      const k = 0.32 * Math.exp(-Math.pow(rad / 2.9, 2.5)) * (0.6 + 0.4 * rnd());
+      add(rad * Math.cos(ang), 0, rad * Math.sin(ang), 0, 1, 0, SNOW[0] * k, SNOW[1] * k, SNOW[2] * k, 0, 0, 0);
+    }
+    // коробка (группа 1) и крышка (группа 2): боковые грани
+    for (const [grp, hw, yc, hh, shine] of [[1, 1.0, 0.7, 0.7, 0.15], [2, 1.07, 1.575, 0.175, 0.25]]) {
+      for (const ax of [0, 2]) for (const sg of [-1, 1]) {
+        const ot = ax === 0 ? 2 : 0, n = [0, 0, 0]; n[ax] = sg;
+        const m = Math.floor(RHO * 4 * hw * hh);
+        for (let k = 0; k < m; k++) {
+          const p = [0, 0, 0]; p[ax] = sg * hw; p[ot] = (rnd() * 2 - 1) * hw; p[1] = yc + (rnd() * 2 - 1) * hh;
+          const c = paper(p[ot] + (ax * 3 + sg) * 0.37, p[1]), o = occl(p[1]);
+          add(p[0], p[1], p[2], n[0], n[1], n[2], c[0] * o, c[1] * o, c[2] * o, shine, grp, 0);
+        }
+      }
+    }
+    { const hw = 1.07, m = Math.floor(RHO * 4 * hw * hw);   // верх крышки
+      for (let k = 0; k < m; k++) {
+        const x = (rnd() * 2 - 1) * hw, z = (rnd() * 2 - 1) * hw, c = paper(x + 1.1, z);
+        add(x, 1.75, z, 0, 1, 0, c[0], c[1], c[2], 0.25, 2, 0);
+      } }
+    // ленты крестом (группа 3)
+    for (const ax of [0, 2]) for (const sg of [-1, 1]) {
+      const ot = ax === 0 ? 2 : 0, n = [0, 0, 0]; n[ax] = sg;
+      for (const [off, yc, hh, body] of [[1.015, 0.7, 0.7, true], [1.085, 1.575, 0.175, false]]) {
+        const m = Math.floor(RHO * 4 * 0.17 * hh);
+        for (let k = 0; k < m; k++) {
+          const p = [0, 0, 0]; p[ax] = sg * off; p[ot] = (rnd() * 2 - 1) * 0.17; p[1] = yc + (rnd() * 2 - 1) * hh;
+          const c = ribbon(p[0], p[1]), o = body ? occl(p[1]) : 1;
+          add(p[0], p[1], p[2], n[0], n[1], n[2], c[0] * o, c[1] * o, c[2] * o, 0.85, 3, 0);
+        }
+      }
+    }
+    for (const [ux, uz] of [[1.07, 0.17], [0.17, 1.07]]) {
+      const m = Math.floor(RHO * 4 * ux * uz);
+      for (let k = 0; k < m; k++) {
+        const x = (rnd() * 2 - 1) * ux, z = (rnd() * 2 - 1) * uz, c = ribbon(x, 1.765);
+        add(x, 1.765, z, 0, 1, 0, c[0], c[1], c[2], 0.85, 3, 0);
+      }
+    }
+    // лента-полоса вокруг кривой
+    function strip(C, w, wid, cb) {
+      const K = C.length, T = [], seg = []; let tot = 0;
+      for (let i = 0; i < K; i++) {
+        const a = C[Math.max(i - 1, 0)], b = C[Math.min(i + 1, K - 1)], q = (i === 0 || i === K - 1) ? 1 : 2;
+        const d = [(b[0] - a[0]) / q, (b[1] - a[1]) / q, (b[2] - a[2]) / q], L = Math.hypot(d[0], d[1], d[2]);
+        T.push(d); seg.push(L); tot += L;
+      }
+      const m = Math.floor(RHO * tot * 2 * wid);
+      for (let k = 0; k < m; k++) {
+        const ti = rnd() * (K - 1.001), i0 = ti | 0, f = ti - i0, r = rnd() * 2 - 1;
+        const p = [0, 0, 0];
+        for (let j = 0; j < 3; j++) p[j] = C[i0][j] * (1 - f) + C[i0 + 1][j] * f + w[j] * wid * r;
+        const tg = T[i0].map(v => v / (seg[i0] + 1e-9));
+        const n = [tg[1] * w[2] - tg[2] * w[1], tg[2] * w[0] - tg[0] * w[2], tg[0] * w[1] - tg[1] * w[0]];
+        cb(p, n, ti, r, i0, f);
+      }
+    }
+    // бант (группа 4)
+    const base = [0, 1.77, 0];
+    function loop(phi, A, B, lift, h0, wid, color) {
+      const K = 400, s = [], Cc = [], dx = Math.cos(phi), dz = Math.sin(phi);
+      for (let i = 0; i < K; i++) {
+        const th = 6.2832 * i / (K - 1), sv = A * (1 - Math.cos(th)) / 2;
+        const h = h0 + sv * lift + B * Math.sin(th) * (0.55 + 0.45 * sv / A);
+        s.push(sv); Cc.push([base[0] + dx * sv, base[1] + h, base[2] + dz * sv]);
+      }
+      strip(Cc, [-dz, 0, dx], wid, (p, n, ti, r, i0, f) => {
+        const sp = s[i0] * (1 - f) + s[i0 + 1] * f, k = 0.72 + 0.32 * sp / A + 0.06 * r;
+        add(p[0], p[1], p[2], n[0], n[1], n[2], color[0] * k, color[1] * k, color[2] * k, 0.9, 4, 1);
+      });
+    }
+    for (let k = 0; k < 6; k++) loop(k * Math.PI / 3 + 0.3, k % 2 === 0 ? 0.95 : 0.78, 0.24, 0.75, 0.05, 0.12, pal.rib);
+    for (let k = 0; k < 4; k++) loop(k * Math.PI / 2 + Math.PI / 4 + 0.3, 0.55, 0.16, 1.05, 0.10, 0.10, pal.champ);
+    // хвосты банта с вырезом «ласточкин хвост» и узел (группа 5)
+    for (const [phi, wave] of [[35 * Math.PI / 180, 0], [215 * Math.PI / 180, 1.7]]) {
+      const Lt = 1.38, K = 200, dx = Math.cos(phi), dz = Math.sin(phi), Cc = [];
+      for (let i = 0; i < K; i++) {
+        const u = 0.05 + (Lt - 0.05) * i / (K - 1), lat = 0.16 * Math.sin(u * 2.6 + wave);
+        Cc.push([base[0] + dx * u - dz * lat, base[1] + 0.012 + 0.05 * (u / Lt) * (u / Lt), base[2] + dz * u + dx * lat]);
+      }
+      strip(Cc, [-dz, 0, dx], 0.17, (p, n, ti, r) => {
+        const uu = ti / (K - 1), q = Math.min(1, Math.max(0, (uu - 0.9) / 0.1));
+        if (q > Math.abs(r)) return;
+        const k = 0.8 + 0.25 * uu;
+        add(p[0], p[1], p[2], n[0], n[1], n[2], pal.rib[0] * k, pal.rib[1] * k, pal.rib[2] * k, 0.9, 5, 1);
+      });
+    }
+    { const rad = [0.30, 0.22, 0.30], m = RHO * 3;
+      for (let k = 0; k < m; k++) {
+        let v = [gauss(), gauss(), gauss()]; const l = Math.hypot(v[0], v[1], v[2]) || 1; v = v.map(x => x / l);
+        add(base[0] + v[0] * rad[0], base[1] + 0.10 + v[1] * rad[1], base[2] + v[2] * rad[2],
+            v[0] / rad[0], v[1] / rad[1], v[2] / rad[2], pal.champ[0] * .95, pal.champ[1] * .95, pal.champ[2] * .95, 0.95, 5, 1);
+      } }
+
+    const n = G.length, Pf = new Float32Array(P);
+    for (let i = 0; i < n; i++) Pf[3 * i + 1] -= 1.15;       // центрируем по высоте
+    const key = new Float32Array(n); for (let i = 0; i < n; i++) key[i] = rnd();
+    return { n, P: Pf, N: new Float32Array(N), C: new Float32Array(C), S: new Float32Array(S), G: new Uint8Array(G), T: new Uint8Array(T), key };
+  }
+
+  // ---------- рендер
+  const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = W * DPR; cv.height = H * DPR;
+  const bg = document.createElement("canvas"); bg.width = W * DPR; bg.height = H * DPR;
+  { const b = bg.getContext("2d"); b.scale(DPR, DPR);
+    const g = b.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#050712"); g.addColorStop(1, "#0e1128");
+    b.fillStyle = g; b.fillRect(0, 0, W, H);
+    const r = b.createRadialGradient(W / 2, H * 0.52, 0, W / 2, H * 0.52, 420);
+    r.addColorStop(0, "rgba(40,26,46,.55)"); r.addColorStop(1, "rgba(40,26,46,0)");
+    b.fillStyle = r; b.fillRect(0, 0, W, H); }
+
+  let L = [-0.35, 0.55, 0.80]; { const l = Math.hypot(...L); L = L.map(v => v / l); }
+  let Hh = [L[0], L[1], L[2] + 1]; { const l = Math.hypot(...Hh); Hh = Hh.map(v => v / l); }
+  const NF = 220, fl = { x: [], z: [], y: [], v: [], ph: [], b: [], ch: [] };
+  { const r = mk(99); for (let i = 0; i < NF; i++) { fl.x.push(r() * 8.4 - 4.2); fl.z.push(r() * 7 - 3.5); fl.y.push(r() * 8); fl.v.push(0.5 + r() * 0.7); fl.ph.push(r() * 6.28); fl.b.push(0.6 + r() * 0.4); fl.ch.push([DOT, STAR, PLUS, DOT][(r() * 4) | 0]); } }
+
+  const zbuf = new Float32Array(COLS * ROWS), cr = new Float32Array(COLS * ROWS), cg = new Float32Array(COLS * ROWS),
+        cb = new Float32Array(COLS * ROWS), cc = new Uint8Array(COLS * ROWS);
+  let scene = build(PALETTES[0]), tt = 0, ang = 0, speed = 1, frameNo = 0, shown = 0;
+
+  function hash(i) { i = Math.imul(i ^ (i >>> 15), 0x2c1b3c6d); i = Math.imul(i ^ (i >>> 12), 0x297a2d39); return ((i ^ (i >>> 15)) >>> 0) / 4294967296; }
+
+  function render() {
+    const { n, P, N, C, S, G, T, key } = scene;
+    zbuf.fill(-1e9); cc.fill(0);
+    const ca = Math.cos(ang), sa = Math.sin(ang), cp = Math.cos(PITCH), sp = Math.sin(PITCH);
+    const prog = REVEAL.map(([t0, du]) => Math.min(1, Math.max(0, (tt - t0) / du)));
+    const seed = Math.floor(frameNo / 3) * 7919;
+    shown = 0;
+    for (let i = 0; i < n; i++) {
+      const g = G[i];
+      if (key[i] >= prog[g]) continue;
+      const j = 3 * i;
+      let x = P[j], y = P[j + 1], z = P[j + 2], nx = N[j], ny = N[j + 1], nz = N[j + 2];
+      const x0 = x, z0 = z;
+      if (g !== 0) { let t = x * ca + z * sa; z = -x * sa + z * ca; x = t; t = nx * ca + nz * sa; nz = -nx * sa + nz * ca; nx = t; }
+      let t2 = y * cp - z * sp; z = y * sp + z * cp; y = t2;
+      t2 = ny * cp - nz * sp; nz = ny * sp + nz * cp; ny = t2;
+      shown++;
+      const sc = CAM_D / (CAM_D - z);
+      const col = Math.floor((W / 2 + x * SCALE * sc) / CW), row = Math.floor((H * 0.5 - y * SCALE * sc) / CH);
+      if (col < 0 || col >= COLS || row < 0 || row >= ROWS) continue;
+      const cell = row * COLS + col;
+      if (z <= zbuf[cell]) continue;
+      if (T[i] && nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      // освещение
+      const diff = Math.max(0, nx * L[0] + ny * L[1] + nz * L[2]), fill = Math.max(0, 0.8 * nx + 0.1 * ny + 0.3 * nz);
+      const base = 0.42 + 0.95 * diff;
+      let r = C[j] * base + 0.06 * fill, gg = C[j + 1] * base + 0.075 * fill, b = C[j + 2] * base + 0.15 * fill;
+      const spec = S[i] * Math.pow(Math.max(0, nx * Hh[0] + ny * Hh[1] + nz * Hh[2]), 28) * 1.2;
+      r += spec; gg += spec * .95; b += spec * .85;
+      if (g === 0) {
+        const gx = x0 * ca - z0 * sa, gz = x0 * sa + z0 * ca, d = Math.max(Math.abs(gx), Math.abs(gz)) - 1.0;
+        const sh = 1 - 0.85 * Math.exp(-Math.max(d, 0) * 1.8); r *= sh; gg *= sh; b *= sh;
+      } else {
+        const rim = Math.pow(1 - Math.min(1, Math.max(0, nz)), 3) * 0.22;
+        r += rim * .25; gg += rim * .4; b += rim;
+      }
+      let ch = -1;
+      if (g >= 3 && hash(i + seed) < 0.0025) { r += 1.2; gg += 1.2; b += 1.2; ch = STAR; }
+      const lum = Math.min(1, Math.max(0, .3 * r + .59 * gg + .11 * b));
+      if (ch < 0) ch = Math.min(NR - 1, Math.floor(Math.pow(lum, 0.85) * (NR - 1)) + (lum > 0.03 ? 1 : 0));
+      zbuf[cell] = z; cr[cell] = r; cg[cell] = gg; cb[cell] = b; cc[cell] = ch;
+    }
+    // снежинки
+    for (let i = 0; i < NF; i++) {
+      const fy = ((fl.y[i] - tt * fl.v[i]) % 8 + 8) % 8 - 3.6, fx = fl.x[i] + 0.12 * Math.sin(tt * 1.3 + fl.ph[i]), fz = fl.z[i];
+      const sc = CAM_D / (CAM_D - fz);
+      const col = Math.floor((W / 2 + fx * SCALE * sc) / CW), row = Math.floor((H * 0.5 - fy * SCALE * sc) / CH);
+      if (col < 0 || col >= COLS || row < 0 || row >= ROWS) continue;
+      const cell = row * COLS + col;
+      if (fz <= zbuf[cell]) continue;
+      zbuf[cell] = fz; cr[cell] = .88 * fl.b[i]; cg[cell] = .94 * fl.b[i]; cb[cell] = fl.b[i]; cc[cell] = fl.ch[i];
+    }
+    // вывод
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.drawImage(bg, 0, 0, W, H);
+    ctx.textBaseline = "alphabetic";
+    for (let row = 0; row < ROWS; row++) for (let col = 0; col < COLS; col++) {
+      const cell = row * COLS + col, ch = cc[cell];
+      if (!ch) continue;
+      ctx.fillStyle = `rgb(${Math.min(255, cr[cell] * 382) | 0},${Math.min(255, cg[cell] * 382) | 0},${Math.min(255, cb[cell] * 382) | 0})`;
+      ctx.fillText(RAMP[ch], col * CW, row * CH + CH - 3);
+    }
+    ctx.font = '11px "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace';
+    ctx.fillStyle = "#ff5a78"; ctx.textAlign = "right"; ctx.fillText(`t ${tt.toFixed(2).padStart(5, "0")}s`, W - 14, 22);
+    ctx.fillStyle = "#7882a8"; ctx.textAlign = "left";
+    ctx.fillText("@gift.js · 2026", 14, H - 50);
+    ctx.fillText(`rotation ${((ang * 180 / Math.PI) % 360).toFixed(2).padStart(6, "0")}°   points ${shown.toLocaleString("en-US")}`, 14, H - 34);
+    setFont();
+  }
+  function setFont() { ctx.font = 'bold 13px "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace'; }
+
+  // ---------- управление
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const spd = document.getElementById("spd"), pals = document.getElementById("pals");
+  if (reduce) { speed = 0; spd.value = 0; tt = 7; }
+  spd.addEventListener("input", () => { speed = +spd.value; });
+  document.getElementById("replay").addEventListener("click", () => { tt = 0; });
+  PALETTES.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.setAttribute("aria-pressed", i === 0 ? "true" : "false");
+    b.innerHTML = `<span class="swatch" style="background:${p.sw}"></span>${p.name}`;
+    b.addEventListener("click", () => {
+      scene = build(p);
+      [...pals.children].forEach(c => c.setAttribute("aria-pressed", c === b ? "true" : "false"));
+    });
+    pals.appendChild(b);
+  });
+
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    requestAnimationFrame(loop);
+    const dt = Math.min(0.1, (now - last) / 1000); last = now; acc += dt;
+    if (acc < 1 / 31) return;
+    tt += acc; ang += acc * SPIN * speed; acc = 0; frameNo++;
+    render();
+  }
+  setFont();
+  (document.fonts && document.fonts.load ? document.fonts.load('bold 13px "JetBrains Mono"').catch(() => {}) : Promise.resolve())
+    .then(() => { setFont(); requestAnimationFrame(loop); });
+})();
+</script>
+
+</body></html>
